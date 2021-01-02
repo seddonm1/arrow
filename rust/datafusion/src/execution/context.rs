@@ -34,7 +34,7 @@ use arrow::csv;
 
 use crate::datasource::csv::CsvFile;
 use crate::datasource::parquet::ParquetTable;
-use crate::datasource::TableProvider;
+use crate::datasource::{TableProvider, MemTable};
 use crate::error::{DataFusionError, Result};
 use crate::execution::dataframe_impl::DataFrameImpl;
 use crate::logical_plan::{
@@ -427,6 +427,28 @@ impl ExecutionContext {
             Err(e) => Err(DataFusionError::Execution(format!(
                 "Could not create directory {}: {:?}",
                 path, e
+            ))),
+        }
+    }
+
+    /// Materialize a plan into a MemTable.
+    pub async fn persist_table(
+        &mut self,
+        table_name: &str,
+    ) -> Result<()> {
+        match self.state.lock().unwrap().datasources.get(table_name) {
+            Some(provider) => {
+                let mem_table = MemTable::load(provider.as_ref(), self.state.lock().unwrap().config.batch_size).await?;
+                self.state
+                    .lock()
+                    .unwrap()
+                    .datasources
+                    .insert(table_name.to_string(), Arc::new(mem_table));
+                Ok(())
+            }
+            _ => Err(DataFusionError::Plan(format!(
+                "No table named '{}'",
+                table_name
             ))),
         }
     }
