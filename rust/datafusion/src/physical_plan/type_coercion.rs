@@ -85,6 +85,24 @@ pub fn data_types(
                 .collect()]
         }
         Signature::Exact(valid_types) => vec![valid_types.clone()],
+        Signature::OneOf(valid_types) => {
+            let valid_signature = valid_types
+                .iter()
+                .filter(|x| x.len() == current_types.len())
+                .collect::<Vec<_>>();
+            if valid_signature.len() != 1 {
+                return Err(DataFusionError::Plan(format!(
+                    "The function expected {} arguments but received {}",
+                    valid_types
+                        .iter()
+                        .map(|x| x.len().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" or "),
+                    current_types.len()
+                )));
+            }
+            cartesian_product(valid_signature.first().unwrap())
+        }
         Signature::Any(number) => {
             if current_types.len() != *number {
                 return Err(DataFusionError::Plan(format!(
@@ -149,20 +167,35 @@ fn maybe_data_types(
 pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
     use self::DataType::*;
     match type_into {
-        Int8 => matches!(type_from, Int8),
-        Int16 => matches!(type_from, Int8 | Int16 | UInt8),
-        Int32 => matches!(type_from, Int8 | Int16 | Int32 | UInt8 | UInt16),
+        Int8 => matches!(type_from, Int8 | Utf8 | LargeUtf8),
+        Int16 => matches!(type_from, Int8 | Int16 | UInt8 | Utf8 | LargeUtf8),
+        Int32 => matches!(
+            type_from,
+            Int8 | Int16 | Int32 | UInt8 | UInt16 | Utf8 | LargeUtf8
+        ),
         Int64 => matches!(
             type_from,
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | Utf8 | LargeUtf8
         ),
-        UInt8 => matches!(type_from, UInt8),
-        UInt16 => matches!(type_from, UInt8 | UInt16),
-        UInt32 => matches!(type_from, UInt8 | UInt16 | UInt32),
-        UInt64 => matches!(type_from, UInt8 | UInt16 | UInt32 | UInt64),
+        UInt8 => matches!(type_from, UInt8 | Utf8 | LargeUtf8),
+        UInt16 => matches!(type_from, UInt8 | UInt16 | Utf8 | LargeUtf8),
+        UInt32 => matches!(type_from, UInt8 | UInt16 | UInt32 | Utf8 | LargeUtf8),
+        UInt64 => matches!(
+            type_from,
+            UInt8 | UInt16 | UInt32 | UInt64 | Utf8 | LargeUtf8
+        ),
         Float32 => matches!(
             type_from,
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Float32
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float32
+                | Utf8
+                | LargeUtf8
         ),
         Float64 => matches!(
             type_from,
@@ -175,11 +208,38 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
                 | UInt64
                 | Float32
                 | Float64
+                | Utf8
+                | LargeUtf8
         ),
         Timestamp(TimeUnit::Nanosecond, None) => matches!(type_from, Timestamp(_, None)),
         Utf8 => true,
+        LargeUtf8 => true,
         _ => false,
     }
+}
+
+/// Calculate the cartesian_product vectors of DataTypes so all Signature::OneOf combinations can be generated
+fn cartesian_product(lists: &Vec<Vec<DataType>>) -> Vec<Vec<DataType>> {
+    let mut res = vec![];
+
+    let mut list_iter = lists.iter();
+    if let Some(first_list) = list_iter.next() {
+        for i in first_list.clone() {
+            res.push(vec![i]);
+        }
+    }
+    for l in list_iter {
+        let mut tmp = vec![];
+        for r in res {
+            for el in l.clone() {
+                let mut tmp_el = r.clone();
+                tmp_el.push(el);
+                tmp.push(tmp_el);
+            }
+        }
+        res = tmp;
+    }
+    res
 }
 
 #[cfg(test)]
@@ -262,6 +322,11 @@ mod tests {
                 Signature::Uniform(1, vec![DataType::UInt32]),
                 vec![DataType::UInt32],
             )?,
+            case(
+                vec![DataType::UInt16],
+                Signature::OneOf(vec![vec![vec![DataType::UInt32]]]),
+                vec![DataType::UInt32],
+            )?,
             // same type
             case(
                 vec![DataType::UInt32, DataType::UInt32],
@@ -269,8 +334,21 @@ mod tests {
                 vec![DataType::UInt32, DataType::UInt32],
             )?,
             case(
+                vec![DataType::UInt32, DataType::UInt32],
+                Signature::OneOf(vec![vec![
+                    vec![DataType::UInt32],
+                    vec![DataType::UInt32],
+                ]]),
+                vec![DataType::UInt32, DataType::UInt32],
+            )?,
+            case(
                 vec![DataType::UInt32],
                 Signature::Uniform(1, vec![DataType::Float32, DataType::Float64]),
+                vec![DataType::Float32],
+            )?,
+            case(
+                vec![DataType::UInt32],
+                Signature::OneOf(vec![vec![vec![DataType::Float32, DataType::Float64]]]),
                 vec![DataType::Float32],
             )?,
             // u32 -> f32

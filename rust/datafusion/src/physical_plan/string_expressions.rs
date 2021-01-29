@@ -19,7 +19,7 @@
 
 use crate::error::{DataFusionError, Result};
 use arrow::array::{
-    Array, ArrayRef, GenericStringArray, StringArray, StringBuilder,
+    Array, ArrayRef, GenericStringArray, Int64Array, StringArray, StringBuilder,
     StringOffsetSizeTrait,
 };
 
@@ -68,6 +68,107 @@ pub fn concatenate(args: &[ArrayRef]) -> Result<StringArray> {
         }
     }
     Ok(builder.finish())
+}
+
+/// Extends the string to length length by prepending the characters fill (a space by default). If the string is already longer than length then it is truncated (on the right).
+pub fn lpad<T: StringOffsetSizeTrait>(
+    args: &[ArrayRef],
+) -> Result<GenericStringArray<T>> {
+    match args.len() {
+        2 => {
+            let string_array: &GenericStringArray<T> = args[0]
+                .as_any()
+                .downcast_ref::<GenericStringArray<T>>()
+                .unwrap();
+
+            let length_array: &Int64Array = args[1]
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "could not cast length to Int64Array".to_string(),
+                    )
+                })?;
+
+            Ok(string_array
+                .iter()
+                .enumerate()
+                .map(|(i, x)| {
+                    if length_array.is_null(i) {
+                        None
+                    } else {
+                        x.map(|x: &str| {
+                            let length = length_array.value(i) as usize;
+                            if length == 0 {
+                                "".to_string()
+                            } else if length < x.len() {
+                                x[..length].to_string()
+                            } else {
+                                let mut s = x.to_string();
+                                s.insert_str(0, " ".repeat(length - x.len()).as_str());
+                                s
+                            }
+                        })
+                    }
+                })
+                .collect())
+        }
+        3 => {
+            let string_array: &GenericStringArray<T> = args[0]
+                .as_any()
+                .downcast_ref::<GenericStringArray<T>>()
+                .unwrap();
+
+            let length_array: &Int64Array =
+                args[1].as_any().downcast_ref::<Int64Array>().unwrap();
+
+            let fill_array: &GenericStringArray<T> = args[2]
+                .as_any()
+                .downcast_ref::<GenericStringArray<T>>()
+                .unwrap();
+
+            Ok(string_array
+                .iter()
+                .enumerate()
+                .map(|(i, x)| {
+                    if length_array.is_null(i) || fill_array.is_null(i) {
+                        None
+                    } else {
+                        x.map(|x: &str| {
+                            let length = length_array.value(i) as usize;
+                            let fill_chars =
+                                fill_array.value(i).chars().collect::<Vec<char>>();
+                            if length == 0 {
+                                "".to_string()
+                            } else if length < x.len() {
+                                x[..length].to_string()
+                            } else if fill_chars.is_empty() {
+                                x.to_string()
+                            } else {
+                                let mut s = x.to_string();
+                                let mut char_vector =
+                                    Vec::<char>::with_capacity(length - x.len());
+                                for l in 0..length - x.len() {
+                                    char_vector.push(
+                                        *fill_chars.get(l % fill_chars.len()).unwrap(),
+                                    );
+                                }
+                                s.insert_str(
+                                    0,
+                                    char_vector.iter().collect::<String>().as_str(),
+                                );
+                                s
+                            }
+                        })
+                    }
+                })
+                .collect())
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "lpad was called with {} arguments. It requires 2 or 3.",
+            other
+        ))),
+    }
 }
 
 macro_rules! string_unary_function {

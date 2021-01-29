@@ -66,6 +66,21 @@ pub enum Signature {
     Uniform(usize, Vec<DataType>),
     /// exact number of arguments of an exact type
     Exact(Vec<DataType>),
+    /// fixed number of arguments of vectors of valid types
+    // A function of one valid signature where the first signature has one argument of f64 is `OneOf(vec![vec![vec![DataType::Float64]]])`
+    // A function of one valid signature where the first signature has one argument of f64 or f32 is `OneOf(vec![vec![vec![DataType::Float32, DataType::Float64]]])`
+    // A function of one valid signature where the first signature has two arguments with first argument of f64 or f32 and second argument of utf8 is:
+    // `OneOf(vec![
+    //    vec![vec![DataType::Float32, DataType::Float64], vec![DataType::Utf8]]
+    // ])`
+    // A function of two valid signatures where:
+    // - the first signature has two arguments with first argument of f64 or f32 and second argument of utf8
+    // - the second signature has three arguments with first argument of f64 or f32 and second argument of utf8 and third argument f64 is:
+    // `OneOf(vec![
+    //    vec![vec![DataType::Float32, DataType::Float64], vec![DataType::Utf8]]
+    //    ,vec![vec![DataType::Float32, DataType::Float64], vec![DataType::Utf8], vec![DataType::Float64]]
+    // ])`
+    OneOf(Vec<Vec<Vec<DataType>>>),
     /// fixed number of arguments of arbitrary types
     Any(usize),
 }
@@ -129,6 +144,8 @@ pub enum BuiltinScalarFunction {
     Ltrim,
     /// trim right
     Rtrim,
+    /// lpad
+    Lpad,
     /// to_timestamp
     ToTimestamp,
     /// construct an array from columns
@@ -184,6 +201,7 @@ impl FromStr for BuiltinScalarFunction {
             "lower" => BuiltinScalarFunction::Lower,
             "trim" => BuiltinScalarFunction::Trim,
             "ltrim" => BuiltinScalarFunction::Ltrim,
+            "lpad" => BuiltinScalarFunction::Lpad,
             "rtrim" => BuiltinScalarFunction::Rtrim,
             "upper" => BuiltinScalarFunction::Upper,
             "to_timestamp" => BuiltinScalarFunction::ToTimestamp,
@@ -354,6 +372,16 @@ pub fn return_type(
                 ));
             }
         }),
+        BuiltinScalarFunction::Lpad => Ok(match arg_types[0] {
+            DataType::LargeUtf8 => DataType::LargeUtf8,
+            DataType::Utf8 => DataType::Utf8,
+            _ => {
+                // this error is internal as `data_types` should have captured this.
+                return Err(DataFusionError::Internal(
+                    "The lpad function can only accept strings.".to_string(),
+                ));
+            }
+        }),
         _ => Ok(DataType::Float64),
     }
 }
@@ -428,6 +456,14 @@ pub fn create_physical_expr(
         BuiltinScalarFunction::Concat => {
             |args| Ok(Arc::new(string_expressions::concatenate(args)?))
         }
+        BuiltinScalarFunction::Lpad => |args| match args[0].data_type() {
+            DataType::Utf8 => Ok(Arc::new(string_expressions::lpad::<i32>(args)?)),
+            DataType::LargeUtf8 => Ok(Arc::new(string_expressions::lpad::<i64>(args)?)),
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function lpad",
+                other,
+            ))),
+        },
         BuiltinScalarFunction::Lower => |args| match args[0].data_type() {
             DataType::Utf8 => Ok(Arc::new(string_expressions::lower::<i32>(args)?)),
             DataType::LargeUtf8 => Ok(Arc::new(string_expressions::lower::<i64>(args)?)),
@@ -523,6 +559,17 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
         BuiltinScalarFunction::NullIf => {
             Signature::Uniform(2, SUPPORTED_NULLIF_TYPES.to_vec())
         }
+        BuiltinScalarFunction::Lpad => Signature::OneOf(vec![
+            vec![
+                vec![DataType::Utf8, DataType::LargeUtf8],
+                vec![DataType::Int64],
+            ],
+            vec![
+                vec![DataType::Utf8, DataType::LargeUtf8],
+                vec![DataType::Int64],
+                vec![DataType::Utf8, DataType::LargeUtf8],
+            ],
+        ]),
         // math expressions expect 1 argument of type f64 or f32
         // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
         // return the best approximation for it (in f64).
@@ -636,7 +683,9 @@ mod tests {
     use super::*;
     use crate::{error::Result, physical_plan::expressions::lit, scalar::ScalarValue};
     use arrow::{
-        array::{ArrayRef, FixedSizeListArray, Float64Array, Int32Array, StringArray},
+        array::{
+            Array, ArrayRef, FixedSizeListArray, Float64Array, Int32Array, StringArray,
+        },
         datatypes::Field,
         record_batch::RecordBatch,
     };
@@ -723,6 +772,146 @@ mod tests {
         } else {
             Ok(())
         }
+    }
+
+    fn generic_string_function(
+        fun: BuiltinScalarFunction,
+        args: Vec<Arc<dyn PhysicalExpr>>,
+        expected: Option<&str>,
+    ) -> Result<()> {
+        println!("{}", fun);
+        // any type works here: we evaluate against a literal of `value`
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
+
+        let expr = create_physical_expr(&fun, &args, &schema)?;
+
+        // type is correct
+        assert_eq!(expr.data_type(&schema)?, DataType::Utf8);
+
+        // evaluate works
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+
+        // downcast works
+        let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+
+        // value is correct
+        match expected {
+            Some(v) => assert_eq!(result.value(0), v),
+            None => assert!(result.is_null(0)),
+        };
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_string_functions() -> Result<()> {
+        generic_string_function(
+            BuiltinScalarFunction::Lpad,
+            vec![
+                lit(ScalarValue::Utf8(Some("hi".to_string()))),
+                lit(ScalarValue::Int64(Some(5))),
+            ],
+            Some("   hi"),
+        )?;
+        generic_string_function(
+            BuiltinScalarFunction::Lpad,
+            vec![
+                lit(ScalarValue::Utf8(Some("hi".to_string()))),
+                lit(ScalarValue::Int64(Some(0))),
+            ],
+            Some(""),
+        )?;
+        generic_string_function(
+            BuiltinScalarFunction::Lpad,
+            vec![
+                lit(ScalarValue::Utf8(Some("hi".to_string()))),
+                lit(ScalarValue::Int64(None)),
+            ],
+            None,
+        )?;
+        generic_string_function(
+            BuiltinScalarFunction::Lpad,
+            vec![
+                lit(ScalarValue::Utf8(None)),
+                lit(ScalarValue::Int64(Some(5))),
+            ],
+            None,
+        )?;
+        generic_string_function(
+            BuiltinScalarFunction::Lpad,
+            vec![
+                lit(ScalarValue::Utf8(Some("hi".to_string()))),
+                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8(Some("xy".to_string()))),
+            ],
+            Some("xyxhi"),
+        )?;
+        generic_string_function(
+            BuiltinScalarFunction::Lpad,
+            vec![
+                lit(ScalarValue::Utf8(Some("hi".to_string()))),
+                lit(ScalarValue::Int64(Some(21))),
+                lit(ScalarValue::Utf8(Some("abcdef".to_string()))),
+            ],
+            Some("abcdefabcdefabcdefahi"),
+        )?;
+        generic_string_function(
+            BuiltinScalarFunction::Lpad,
+            vec![
+                lit(ScalarValue::Utf8(Some("hi".to_string()))),
+                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8(Some(" ".to_string()))),
+            ],
+            Some("   hi"),
+        )?;
+        generic_string_function(
+            BuiltinScalarFunction::Lpad,
+            vec![
+                lit(ScalarValue::Utf8(Some("hi".to_string()))),
+                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8(Some("".to_string()))),
+            ],
+            Some("hi"),
+        )?;
+        generic_string_function(
+            BuiltinScalarFunction::Lpad,
+            vec![
+                lit(ScalarValue::Utf8(None)),
+                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8(Some("xy".to_string()))),
+            ],
+            None,
+        )?;
+        generic_string_function(
+            BuiltinScalarFunction::Lpad,
+            vec![
+                lit(ScalarValue::Utf8(Some("hi".to_string()))),
+                lit(ScalarValue::Int64(None)),
+                lit(ScalarValue::Utf8(Some("xy".to_string()))),
+            ],
+            None,
+        )?;
+        generic_string_function(
+            BuiltinScalarFunction::Lpad,
+            vec![
+                lit(ScalarValue::Utf8(Some("hi".to_string()))),
+                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8(None)),
+            ],
+            None,
+        )?;
+        generic_string_function(
+            BuiltinScalarFunction::Lpad,
+            vec![
+                lit(ScalarValue::Utf8(Some("hi".to_string()))),
+                lit(ScalarValue::Utf8(Some("5".to_string()))),
+                lit(ScalarValue::Utf8(Some("xy".to_string()))),
+            ],
+            Some("xyxhi"),
+        )?;
+        Ok(())
     }
 
     fn generic_test_array(

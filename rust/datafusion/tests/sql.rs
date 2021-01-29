@@ -484,17 +484,6 @@ async fn sqrt_f32_vs_f64() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn csv_query_error() -> Result<()> {
-    // sin(utf8) should error
-    let mut ctx = create_ctx()?;
-    register_aggregate_csv(&mut ctx)?;
-    let sql = "SELECT sin(c1) FROM aggregate_test_100";
-    let plan = ctx.create_logical_plan(&sql);
-    assert!(plan.is_err());
-    Ok(())
-}
-
 // this query used to deadlock due to the call udf(udf())
 #[tokio::test]
 async fn csv_query_sqrt_sqrt() -> Result<()> {
