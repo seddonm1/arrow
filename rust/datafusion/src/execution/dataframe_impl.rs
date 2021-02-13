@@ -16,20 +16,21 @@
 // under the License.
 
 //! Implementation of DataFrame API
-
+use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use crate::arrow::record_batch::RecordBatch;
+use crate::dataframe::*;
+use crate::datasource::datasource::Statistics;
+use crate::datasource::TableProvider;
 use crate::error::Result;
 use crate::execution::context::{ExecutionContext, ExecutionContextState};
 use crate::logical_plan::{
     col, DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, LogicalPlanBuilder,
     Partitioning,
 };
-use crate::{
-    dataframe::*,
-    physical_plan::{collect, collect_partitioned},
-};
+use crate::physical_plan::ExecutionPlan;
+use crate::{arrow::record_batch::RecordBatch, physical_plan::collect, physical_plan::collect_partitioned};
+use arrow::datatypes::SchemaRef;
 
 use async_trait::async_trait;
 
@@ -165,6 +166,36 @@ impl DataFrame for DataFrameImpl {
     fn registry(&self) -> Arc<dyn FunctionRegistry> {
         let registry = self.ctx_state.lock().unwrap().clone();
         Arc::new(registry)
+    }
+}
+
+impl TableProvider for DataFrameImpl {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::new(self.plan.schema().as_ref().clone().into())
+    }
+
+    fn scan(
+        &self,
+        _projection: &Option<Vec<usize>>,
+        _batch_size: usize,
+        _filters: &[Expr],
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let state = self.ctx_state.lock().unwrap().clone();
+        let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
+        let plan = ctx.optimize(&self.plan)?;
+        ctx.create_physical_plan(&plan)
+    }
+
+    fn statistics(&self) -> Statistics {
+        Statistics {
+            num_rows: None,
+            total_byte_size: None,
+            column_statistics: None,
+        }
     }
 }
 
@@ -367,4 +398,19 @@ mod tests {
         )?;
         Ok(())
     }
+
+    // #[tokio::test]
+    // async fn dataframe_as_table_provider() -> Result<()> {
+    //     let mut ctx = ExecutionContext::new();
+    //     register_aggregate_csv(&mut ctx)?;
+
+    //     let df = ctx.table("aggregate_test_100")?;
+
+    //     let table_provider =
+    //         Box::new(df.as_any().downcast_ref::<DataFrameImpl>().unwrap());
+
+    //     ctx.register_table("abc", table_provider);
+
+    //     Ok(())
+    // }
 }
