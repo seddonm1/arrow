@@ -18,6 +18,7 @@
 //! DataFrame API for building and executing query plans.
 
 use crate::arrow::record_batch::RecordBatch;
+use crate::datasource::TableProvider;
 use crate::error::Result;
 use crate::logical_plan::{
     DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, Partitioning,
@@ -51,7 +52,7 @@ use async_trait::async_trait;
 /// # }
 /// ```
 #[async_trait]
-pub trait DataFrame: Send + Sync {
+pub trait DataFrame: TableProvider + Send + Sync {
     /// Filter the DataFrame by column. Returns a new DataFrame only containing the
     /// specified columns.
     ///

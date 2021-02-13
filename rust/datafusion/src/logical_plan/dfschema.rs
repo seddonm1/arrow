@@ -187,7 +187,7 @@ impl DFSchema {
 }
 
 impl Into<Schema> for DFSchema {
-    /// Convert a schema into a DFSchema
+    /// Convert a DFSchema into a schema
     fn into(self) -> Schema {
         Schema::new(
             self.fields
