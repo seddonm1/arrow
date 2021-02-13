@@ -17,6 +17,7 @@
 
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
+use std::sync::Arc;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -150,7 +151,7 @@ async fn benchmark(opt: BenchmarkOpt) -> Result<Vec<arrow::record_batch::RecordB
                 table,
                 start.elapsed().as_millis()
             );
-            ctx.register_table(table, Box::new(memtable));
+            ctx.register_table(table, Arc::new(memtable));
         } else {
             ctx.register_table(table, table_provider);
         }
@@ -1098,7 +1099,7 @@ fn get_table(
     table: &str,
     table_format: &str,
     max_concurrency: usize,
-) -> Result<Box<dyn TableProvider + Send + Sync>> {
+) -> Result<Arc<dyn TableProvider + Send + Sync>> {
     match table_format {
         // dbgen creates .tbl ('|' delimited) files without header
         "tbl" => {
@@ -1110,18 +1111,18 @@ fn get_table(
                 .has_header(false)
                 .file_extension(".tbl");
 
-            Ok(Box::new(CsvFile::try_new(&path, options)?))
+            Ok(Arc::new(CsvFile::try_new(&path, options)?))
         }
         "csv" => {
             let path = format!("{}/{}", path, table);
             let schema = get_schema(table);
             let options = CsvReadOptions::new().schema(&schema).has_header(true);
 
-            Ok(Box::new(CsvFile::try_new(&path, options)?))
+            Ok(Arc::new(CsvFile::try_new(&path, options)?))
         }
         "parquet" => {
             let path = format!("{}/{}", path, table);
-            Ok(Box::new(ParquetTable::try_new(&path, max_concurrency)?))
+            Ok(Arc::new(ParquetTable::try_new(&path, max_concurrency)?))
         }
         other => {
             unimplemented!("Invalid file format '{}'", other);
@@ -1607,7 +1608,7 @@ mod tests {
 
             let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]])?;
 
-            ctx.register_table(table, Box::new(provider));
+            ctx.register_table(table, Arc::new(provider));
         }
 
         let plan = create_logical_plan(&mut ctx, n)?;

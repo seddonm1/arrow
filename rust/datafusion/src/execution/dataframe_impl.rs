@@ -396,7 +396,7 @@ mod tests {
 
         let df = ctx.table("aggregate_test_100")?;
 
-        ctx.register_table("abc", Box::new(df));
+        ctx.register_table("abc", df);
 
         Ok(())
     }

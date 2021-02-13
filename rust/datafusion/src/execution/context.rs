@@ -258,7 +258,7 @@ impl ExecutionContext {
         filename: &str,
         options: CsvReadOptions,
     ) -> Result<()> {
-        self.register_table(name, Box::new(CsvFile::try_new(filename, options)?));
+        self.register_table(name, Arc::new(CsvFile::try_new(filename, options)?));
         Ok(())
     }
 
@@ -269,7 +269,7 @@ impl ExecutionContext {
             &filename,
             self.state.lock().unwrap().config.concurrency,
         )?;
-        self.register_table(name, Box::new(table));
+        self.register_table(name, Arc::new(table));
         Ok(())
     }
 
@@ -278,13 +278,13 @@ impl ExecutionContext {
     pub fn register_table(
         &mut self,
         name: &str,
-        provider: Box<dyn TableProvider + Send + Sync>,
+        provider: Arc<dyn TableProvider + Send + Sync>,
     ) {
         self.state
             .lock()
             .unwrap()
             .datasources
-            .insert(name.to_string(), provider.into());
+            .insert(name.to_string(), provider);
     }
 
     /// Deregisters the named table.
@@ -1616,7 +1616,7 @@ mod tests {
         let mut ctx = ExecutionContext::new();
 
         let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]])?;
-        ctx.register_table("t", Box::new(provider));
+        ctx.register_table("t", Arc::new(provider));
 
         let myfunc: ScalarFunctionImplementation = Arc::new(|args: &[ArrayRef]| {
             let l = &args[0]
@@ -1717,7 +1717,7 @@ mod tests {
 
         let provider =
             MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
-        ctx.register_table("t", Box::new(provider));
+        ctx.register_table("t", Arc::new(provider));
 
         let result = plan_and_collect(&mut ctx, "SELECT AVG(a) FROM t").await?;
 
@@ -1754,7 +1754,7 @@ mod tests {
 
         let provider =
             MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
-        ctx.register_table("t", Box::new(provider));
+        ctx.register_table("t", Arc::new(provider));
 
         // define a udaf, using a DataFusion's accumulator
         let my_avg = create_udaf(
