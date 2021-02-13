@@ -17,11 +17,9 @@
 
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
+use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
 
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::util::pretty;
