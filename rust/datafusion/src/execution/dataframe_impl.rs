@@ -396,10 +396,7 @@ mod tests {
 
         let df = ctx.table("aggregate_test_100")?;
 
-        let table_provider =
-            Box::new(df.as_any().downcast_ref::<DataFrameImpl>().unwrap());
-
-        ctx.register_table("abc", table_provider);
+        ctx.register_table("abc", Box::new(df));
 
         Ok(())
     }
