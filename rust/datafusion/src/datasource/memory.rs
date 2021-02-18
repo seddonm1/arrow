@@ -107,12 +107,12 @@ impl MemTable {
 
     /// Create a mem table by reading from another data source
     pub async fn load(
-        t: Arc<dyn TableProvider + Send + Sync>,
+        table_provider: Arc<dyn TableProvider + Send + Sync>,
         batch_size: usize,
         output_partitions: Option<usize>,
     ) -> Result<Self> {
-        let schema = t.schema();
-        let exec = t.scan(&None, batch_size, &[])?;
+        let schema = table_provider.schema();
+        let exec = table_provider.scan(&None, batch_size, &[])?;
         let partition_count = exec.output_partitioning().partition_count();
 
         let tasks = (0..partition_count)

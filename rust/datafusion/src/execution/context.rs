@@ -751,7 +751,6 @@ mod tests {
         ctx.register_table("dual", provider);
 
         assert!(ctx.deregister_table("dual").is_some());
-        assert!(ctx.deregister_table("dual").is_none());
 
         Ok(())
     }
