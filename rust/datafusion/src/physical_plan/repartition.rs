@@ -125,7 +125,9 @@ impl ExecutionPlan for RepartitionExec {
                 let input = self.input.clone();
                 let mut channels = channels.clone();
                 let partitioning = self.partitioning.clone();
+                println!("spawning task {}", i);
                 let _: JoinHandle<Result<()>> = tokio::spawn(async move {
+                    println!("spawned task {}", i);
                     let mut stream = input.execute(i).await?;
                     let mut counter = 0;
                     while let Some(result) = stream.next().await {
@@ -157,7 +159,9 @@ impl ExecutionPlan for RepartitionExec {
                     }
                     Ok(())
                 });
-                tokio::task::yield_now().await;
+
+                // disable yield_now for demonstration
+                // tokio::task::yield_now().await;
             }
         }
 
@@ -344,5 +348,32 @@ mod tests {
             output_partitions.push(batches);
         }
         Ok(output_partitions)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn many_to_many_round_robin_within_tokio_task() -> Result<()> {
+        let join_handle: JoinHandle<Result<Vec<Vec<RecordBatch>>>> =
+            tokio::spawn(async move {
+                // define input partitions
+                let schema = test_schema();
+                let partition = create_vec_batches(&schema, 50);
+                let partitions =
+                    vec![partition.clone(), partition.clone(), partition.clone()];
+
+                // repartition from 3 input to 4 output
+                repartition(&schema, partitions, Partitioning::RoundRobinBatch(4)).await
+            });
+
+        let output_partitions = join_handle
+            .await
+            .map_err(|e| DataFusionError::Internal(e.to_string()))??;
+
+        assert_eq!(4, output_partitions.len());
+        assert_eq!(13, output_partitions[0].len());
+        assert_eq!(13, output_partitions[1].len());
+        assert_eq!(12, output_partitions[2].len());
+        assert_eq!(12, output_partitions[3].len());
+
+        Ok(())
     }
 }
